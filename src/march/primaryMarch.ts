@@ -14,6 +14,7 @@ import {
   log2,
   Loop,
   max,
+  select,
   min,
   mix,
   normalize,
@@ -646,11 +647,25 @@ export function createMarchClouds(deps: MarchCloudsDeps) {
       refinementCounter = vec3(0).toVar()
 
       const maxRayDistance = rayNearFar.y.sub(rayNearFar.x)
-      const stepSize = float(minStepSize)
-        .add(float(perspectiveStepScale).sub(1).mul(rayNearFar.x))
-        .toVar()
+      const fullStepSize = float(minStepSize).add(
+        float(perspectiveStepScale).sub(1).mul(rayNearFar.x)
+      )
+      // A ray that ends within two steps, on a surface near an eye inside the
+      // cloud or after a sliver of the layer, would take one full step's worth
+      // of cloud or none depending on the jitter. Two steps span it instead
+      const shortRay = maxRayDistance
+        .greaterThan(0)
+        .and(maxRayDistance.lessThan(fullStepSize.mul(2)))
+      const stepSize = select(
+        shortRay,
+        max(maxRayDistance.mul(0.5), float(0.25)),
+        fullStepSize
+      ).toVar()
       // I don't understand why spatial aliasing remains unless doubling the jitter
-      const rayDistance = stepSize.mul(jitter).mul(2.0).toVar()
+      const rayDistance = stepSize
+        .mul(jitter)
+        .mul(select(shortRay, float(1.0), float(2.0)))
+        .toVar()
       front.initialize()
 
       // Per-ray terms the per-step shading reads (emitted before the loop)
