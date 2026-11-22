@@ -72,12 +72,32 @@ export const cloudsSolarLuminance = /*#__PURE__*/ Fn(() => {
   return atmoGetSolarLuminance()
 })
 
+// Hosts with more than one celestial light can supply the same irradiance and air transfer
+// they use on their scene. Positions here use the atmosphere LUT's length unit.
+interface CloudLighting {
+  irradiance(point: Node<'vec3'>, normal?: Node<'vec3'>): { direct: Node<'vec3'>; indirect: Node<'vec3'> }
+  aerial(start: Node<'vec3'>, end: Node<'vec3'>, shadow: Node<'vec2'>): { transmittance: Node<'vec3'>; inscatter: Node<'vec3'> }
+}
+
+function hostLighting(builder: NodeBuilder): CloudLighting | undefined {
+  return (builder.context as { getCloudLighting?: () => CloudLighting }).getCloudLighting?.()
+}
+
+const scalarIlluminance = Fn(([point, direction]: [Node<'vec3'>, Node<'vec3'>], builder: NodeBuilder) => {
+  const lighting = hostLighting(builder)
+  if (!lighting) return atmoGetSplitScalarIlluminance(point, direction)
+  const { direct, indirect } = lighting.irradiance(point)
+  return splitIlluminance(direct, indirect)
+})
+
+const cloudTransfer = struct({ transmittance: 'vec3', luminance: 'vec3' }, 'CloudsAtmosphereTransfer')
+
 // Accurate path (per-sample LUT reads)
 
 // Cite: clouds.frag:440
 export function createCloudsSunSkyIrradiance(sunDirectionECEF: Node<'vec3'>) {
   return Fn(([positionECEF]: [Node<'vec3'>], builder: NodeBuilder) => {
-    return atmoGetSplitScalarIlluminance(
+    return scalarIlluminance(
       toLengthUnit(positionECEF, builder),
       sunDirectionECEF
     )
@@ -99,6 +119,11 @@ export function createGroundSunSkyIrradiance(sunDirectionECEF: Node<'vec3'>) {
         positionECEF.sub(surfaceNormal.mul(height)),
         builder
       )
+      const lighting = hostLighting(builder)
+      if (lighting) {
+        const { direct, indirect } = lighting.irradiance(groundPositionUnit, surfaceNormal)
+        return splitIlluminance(direct, indirect)
+      }
       return atmoGetSplitIlluminance(
         groundPositionUnit,
         surfaceNormal,
@@ -141,13 +166,13 @@ export function createSunSkyIrradianceCache(
   const surfaceNormal = normalize(cameraUnit)
 
   // Ground irradiance at camera position (scalar, no surface normal)
-  const groundIllu = atmoGetSplitScalarIlluminance(cameraUnit, sunDirectionECEF)
+  const groundIllu = scalarIlluminance(cameraUnit, sunDirectionECEF)
 
   // Cloud irradiance at layer bounds: surfaceNormal * (bottomRadius + height)
   const minPos = surfaceNormal.mul(bottomRadius.add(minHeight).mul(worldToUnit))
   const maxPos = surfaceNormal.mul(bottomRadius.add(maxHeight).mul(worldToUnit))
-  const minIllu = atmoGetSplitScalarIlluminance(minPos, sunDirectionECEF)
-  const maxIllu = atmoGetSplitScalarIlluminance(maxPos, sunDirectionECEF)
+  const minIllu = scalarIlluminance(minPos, sunDirectionECEF)
+  const maxIllu = scalarIlluminance(maxPos, sunDirectionECEF)
 
   return {
     groundSun: varying(groundIllu.get('direct'), 'vGroundSun'),
@@ -245,9 +270,16 @@ export function createIndirectLuminanceToPoint(sunDirectionECEF: Node<'vec3'>) {
       ],
       builder: NodeBuilder
     ) => {
+      const start = toLengthUnit(cameraPositionECEF, builder)
+      const end = toLengthUnit(pointECEF, builder)
+      const lighting = hostLighting(builder)
+      if (lighting) {
+        const { transmittance, inscatter } = lighting.aerial(start, end, shadowLength)
+        return cloudTransfer(transmittance, inscatter)
+      }
       return atmoGetIndirectLuminanceToPoint(
-        toLengthUnit(cameraPositionECEF, builder),
-        toLengthUnit(pointECEF, builder),
+        start,
+        end,
         shadowLength,
         sunDirectionECEF
       )

@@ -137,9 +137,20 @@ export function createSampleCloudShadowOpticalDepth(
 
       const result = float(0).toVar()
 
-      If(outOfBounds, () => {
+      const inBounds = If(outOfBounds, () => {
         result.assign(0)
       })
+      // A single tap has no rotated disc, so nothing here reads the screen
+      // coordinate and a vertex stage can run it.
+      if (shadowSampleCount <= 1) {
+        inBounds.Else(() => {
+          result.assign(
+            readGroundShadowOpticalDepth(uv, distanceToTop, cascadeIndex)
+          )
+        })
+        return result
+      }
+      inBounds
         .ElseIf(radius.lessThan(0.1), () => {
           result.assign(
             readGroundShadowOpticalDepth(uv, distanceToTop, cascadeIndex)

@@ -811,6 +811,9 @@ export class CloudsContext implements QualityPresetTarget {
   /** Whether {@link updateCamera} applies the altitude correction offset */
   correctAltitude = true
 
+  /** Reference sea level above the ellipsoid in metres, for cloud layers specified above MSL. */
+  geoidHeightM = 0
+
   /** Camera height above the ellipsoid, in metres, from {@link updateCamera} */
   cameraHeight = 0
 
@@ -1042,12 +1045,15 @@ export class CloudsContext implements QualityPresetTarget {
         this.ellipsoid,
         this.altitudeCorrection
       )
+      if (this.geoidHeightM !== 0) {
+        this.altitudeCorrection.addScaledVector(this.ellipsoid.getSurfaceNormal(cameraPositionECEF, _vec3b), -this.geoidHeightM)
+      }
     } else {
       this.altitudeCorrection.setScalar(0)
     }
 
     try {
-      this.cameraHeight = _geodetic.setFromECEF(cameraPositionECEF).height
+      this.cameraHeight = _geodetic.setFromECEF(cameraPositionECEF).height - this.geoidHeightM
     } catch {
       // Unable to project position to the ellipsoid surface, keep previous value
     }

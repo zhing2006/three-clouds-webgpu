@@ -60,6 +60,9 @@ export class CameraUniforms {
   // CloudsMaterial.ts:393–398, stored after each render
   private previousProjectionMatrix: Matrix4 | null = null
   private previousViewMatrix: Matrix4 | null = null
+  private readonly worldToECEF = new Matrix4()
+  private readonly previousECEFToWorld = new Matrix4()
+  private readonly previousViewFromWorld = new Matrix4()
 
   isPerspectiveCamera = true
 
@@ -97,7 +100,11 @@ export class CameraUniforms {
     this.cameraDirectionECEF.value.set(_vec4.x, _vec4.y, _vec4.z).normalize()
 
     const prevProj = this.previousProjectionMatrix ?? camera.projectionMatrix
-    const prevView = this.previousViewMatrix ?? camera.matrixWorldInverse
+    this.worldToECEF.copy(worldToECEFMatrix)
+    // Current relative world -> ECEF -> previous relative world, composed in CPU doubles.
+    const prevView = this.previousViewMatrix == null ? camera.matrixWorldInverse
+      : this.previousViewFromWorld.multiplyMatrices(this.previousECEFToWorld, worldToECEFMatrix)
+          .premultiply(this.previousViewMatrix)
     const inverseView = this.inverseViewMatrix.value
 
     // Cite: CloudsMaterial.ts:338–370
@@ -137,6 +144,7 @@ export class CameraUniforms {
     this.previousViewMatrix ??= new Matrix4()
     this.previousProjectionMatrix.copy(camera.projectionMatrix)
     this.previousViewMatrix.copy(camera.matrixWorldInverse)
+    this.previousECEFToWorld.copy(this.worldToECEF).invert()
   }
 
   // Cite: CloudsPass.ts:203–224 (setSize invalidates history)

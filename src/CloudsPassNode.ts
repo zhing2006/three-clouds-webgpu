@@ -479,7 +479,9 @@ export class CloudsPassNode extends Node {
   // Starts "due" so the first frame renders whatever the interval
   private _shadowFramesSinceUpdate = Number.MAX_SAFE_INTEGER
   private _shadowHistoryInvalid = true
-  private _prevShadowMatrices: Matrix4[] = []
+  private _prevShadowMatrices: Matrix4[] = [] // ECEF to the last rendered cascade
+  private readonly _shadowFitECEFToWorld = new Matrix4()
+  private readonly _shadowBasisChange = new Matrix4()
   // shadow.temporalPass as the shadow graph was built. The frame that flips
   // the knob still runs the old program, so its targets must match that one
   private _shadowGraphTemporal: boolean | null = null
@@ -1357,6 +1359,7 @@ export class CloudsPassNode extends Node {
     const due = this.isShadowUpdateDue(ctx, shadowStructureChanged)
     if (due) {
       ctx.updateShadowMaps(camera)
+      this._shadowFitECEFToWorld.copy(ctx.ecefToWorldMatrix)
     }
     return due
   }
@@ -1380,10 +1383,14 @@ export class CloudsPassNode extends Node {
   // was rendered with
   private refreshShadowComposition(ctx: CloudsContext): void {
     if (this._cloudShadow == null) return
-    this.composeShadowFromECEF(
-      ctx,
-      this._cloudShadow.matrices.array as Matrix4[]
-    )
+    const matrices = this._cloudShadow.matrices.array as Matrix4[]
+    const inverse = this._cloudShadow.inverseMatrices.array as Matrix4[]
+    this._shadowBasisChange.multiplyMatrices(this._shadowFitECEFToWorld, ctx.worldToECEFMatrix)
+    for (let i = 0; i < this._cloudShadow.cascadeCount; i++) {
+      matrices[i]!.multiplyMatrices(ctx.shadowMaps!.cascades[i]!.matrix, this._shadowBasisChange)
+      inverse[i]!.copy(matrices[i]!).invert()
+    }
+    this.composeShadowFromECEF(ctx, matrices)
   }
 
   private renderShadowPass(
@@ -1419,7 +1426,8 @@ export class CloudsPassNode extends Node {
       )
       su.mipLevel.value = MIP_LEVELS[i] ?? 2
       if (temporal) {
-        su.reprojectionMatrix.value.copy(this._prevShadowMatrices[i]!)
+        if (this._shadowHistoryInvalid) su.reprojectionMatrix.value.copy(ctx.shadowMaps.cascades[i]!.matrix)
+        else su.reprojectionMatrix.value.multiplyMatrices(this._prevShadowMatrices[i]!, ctx.worldToECEFMatrix)
         su.cascadeIndex.value = i
       }
       renderer.setRenderTarget(this.shadowRT, i)
@@ -1758,7 +1766,7 @@ export class CloudsPassNode extends Node {
     }
     for (let i = 0; i < cascadeCount; i++) {
       if (only != null && i !== only) continue
-      this._prevShadowMatrices[i]!.copy(ctx.shadowMaps!.cascades[i]!.matrix)
+      this._prevShadowMatrices[i]!.multiplyMatrices(ctx.shadowMaps!.cascades[i]!.matrix, ctx.ecefToWorldMatrix)
     }
   }
 

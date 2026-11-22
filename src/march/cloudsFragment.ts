@@ -538,8 +538,10 @@ function createMarchHitBranch(deps: CloudsFragmentDeps) {
           const marchFrontDepth = marchDV.x.div(worldToUnit)
           const absoluteFrontDepth = rayNearFar.x.add(marchFrontDepth)
           frontDepthMetres.assign(absoluteFrontDepth)
+          // A first sample inside dense cloud can be at the eye. Project along the ray
+          // far enough to survive float32 rounding of terrestrial ECEF coordinates.
           const frontPosition = cameraPosition.add(
-            rayDirection.mul(absoluteFrontDepth)
+            rayDirection.mul(absoluteFrontDepth.max(2))
           )
 
           // Cite: clouds.frag:912–928, shadow length hit branch
@@ -860,7 +862,9 @@ function createFragmentComposite(deps: CloudsFragmentDeps) {
       // Cite: clouds.frag:940–942, aerial perspective on the cloud front after
       // the shafts march. Here rather than in the hit branch so both shafts
       // paths feed it alike
-      If(hitClouds.greaterThan(0), () => {
+      // A metre-scale segment between two ECEF positions can round to zero in the
+      // atmosphere lookup. Over that distance keep the cloud radiance at the eye.
+      If(hitClouds.greaterThan(0).and(frontDepthMetres.greaterThan(2)), () => {
         const frontPosition = cameraPosition.add(
           rayDirection.mul(frontDepthMetres)
         )
