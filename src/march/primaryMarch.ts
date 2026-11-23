@@ -652,15 +652,30 @@ export function createMarchClouds(deps: MarchCloudsDeps) {
       )
       // A ray that ends within two steps, on a surface near an eye inside the
       // cloud or after a sliver of the layer, would take one full step's worth
-      // of cloud or none depending on the jitter. Two steps span it instead
+      // of cloud or none depending on the jitter. Two steps span it instead:
+      // the second is perspectiveStepScale times the first, and wherever the
+      // jitter puts the first sample the second falls inside the ray
       const shortRay = maxRayDistance
         .greaterThan(0)
         .and(maxRayDistance.lessThan(fullStepSize.mul(2)))
+        .toVar()
       const stepSize = select(
         shortRay,
-        max(maxRayDistance.mul(0.5), float(0.25)),
+        maxRayDistance.div(float(perspectiveStepScale).add(1)),
         fullStepSize
       ).toVar()
+      // Past an empty sample or interval the march takes a longer step, which
+      // would carry a short ray beyond its end: it keeps to its two steps
+      const stepOverEmpty = (mipLevel: Node<'float'>) => {
+        If(shortRay, () => {
+          stepSize.mulAssign(perspectiveStepScale)
+          rayDistance.addAssign(stepSize)
+        }).Else(() => {
+          const skipped = intervalSkipStep(stepSize, rayDistance, mipLevel)
+          stepSize.assign(skipped.get('stepSize'))
+          rayDistance.assign(skipped.get('rayDistance'))
+        })
+      }
       // I don't understand why spatial aliasing remains unless doubling the jitter
       const rayDistance = stepSize
         .mul(jitter)
@@ -740,9 +755,7 @@ export function createMarchClouds(deps: MarchCloudsDeps) {
             stepSize.mulAssign(perspectiveStepScale)
             rayDistance.addAssign(stepSize)
           }).Else(() => {
-            const skipped = intervalSkipStep(stepSize, rayDistance, mipLevel)
-            stepSize.assign(skipped.get('stepSize'))
-            rayDistance.assign(skipped.get('rayDistance'))
+            stepOverEmpty(mipLevel)
           })
         }, 'void')
 
@@ -757,13 +770,7 @@ export function createMarchClouds(deps: MarchCloudsDeps) {
             ),
             () => {
               front.record(rayDistance, bool(false))
-              const skipped = intervalSkipStep(
-                stepSize,
-                rayDistance,
-                mipLevelAt()
-              )
-              stepSize.assign(skipped.get('stepSize'))
-              rayDistance.assign(skipped.get('rayDistance'))
+              stepOverEmpty(mipLevelAt())
             }
           ).Else(() => {
             doSampling().toStack()

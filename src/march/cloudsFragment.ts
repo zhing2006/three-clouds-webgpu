@@ -445,6 +445,7 @@ function createMarchHitBranch(deps: CloudsFragmentDeps) {
     ecefToWorldMatrix,
     altitudeCorrection,
     reprojectionMatrix,
+    viewReprojectionMatrix,
     marchClouds,
     stbn,
     localWeatherRepeat,
@@ -458,14 +459,16 @@ function createMarchHitBranch(deps: CloudsFragmentDeps) {
       cosTheta,
       rayNearFar,
       shadowNearFarInput,
-      shouldMarch
+      shouldMarch,
+      viewPosition
     ]: [
       Node<'vec3'>,
       Node<'vec3'>,
       Node<'float'>,
       Node<'vec2'>,
       Node<'vec2'>,
-      Node<'bool'>
+      Node<'bool'>,
+      Node<'vec3'>
     ]) => {
       const color = vec4(0).toVar()
       const depthVelocity = vec4(0).toVar()
@@ -538,11 +541,9 @@ function createMarchHitBranch(deps: CloudsFragmentDeps) {
           const marchFrontDepth = marchDV.x.div(worldToUnit)
           const absoluteFrontDepth = rayNearFar.x.add(marchFrontDepth)
           frontDepthMetres.assign(absoluteFrontDepth)
-          // A first sample inside dense cloud can be at the eye. Project along the ray
-          // far enough to survive float32 rounding of terrestrial ECEF coordinates.
-          const frontPosition = cameraPosition.add(
-            rayDirection.mul(absoluteFrontDepth.max(2))
-          )
+          // A first sample inside dense cloud can be at the eye, where the
+          // previous frame's projection divides by zero
+          const reprojectedDepth = absoluteFrontDepth.max(2)
 
           // Cite: clouds.frag:912–928, shadow length hit branch
           if (paths.shafts) {
@@ -580,14 +581,27 @@ function createMarchHitBranch(deps: CloudsFragmentDeps) {
           color.assign(marchLayer)
 
           // Cite: clouds.frag:945–950
-          const previousPosition = getPreviousPosition(frontPosition)
-          const uncorrected = previousPosition.sub(altitudeCorrection)
-          const frontPositionWorld = ecefToWorldMatrix.mul(
-            vec4(uncorrected, 1)
-          ).xyz
-          const prevClipHit = reprojectionMatrix
-            .mul(vec4(frontPositionWorld, 1))
-            .toVar()
+          // The front goes to the previous frame from the eye, as the miss
+          // branch's does. Through ECEF, a float32 at the earth's radius
+          // rounds it to a quarter of a metre or more, which turns a front a
+          // few metres from the eye by degrees. Advected cloud has only an
+          // ECEF position to give
+          const reprojectHit = () => {
+            if (displacement == null) {
+              return viewReprojectionMatrix.mul(
+                vec4(normalize(viewPosition).mul(reprojectedDepth), 1)
+              )
+            }
+            const previousPosition = getPreviousPosition(
+              cameraPosition.add(rayDirection.mul(reprojectedDepth))
+            )
+            const uncorrected = previousPosition.sub(altitudeCorrection)
+            const frontPositionWorld = ecefToWorldMatrix.mul(
+              vec4(uncorrected, 1)
+            ).xyz
+            return reprojectionMatrix.mul(vec4(frontPositionWorld, 1))
+          }
+          const prevClipHit = reprojectHit().toVar()
           prevClipHit.assign(prevClipHit.div(prevClipHit.w))
           // NDC -> uv in the pass's own (top-down) v sense, the same convention
           // as clipXY above. The GL form put every history fetch on the mirror
@@ -989,7 +1003,8 @@ export function buildCloudsFragment(
       rayCosTheta,
       rayNearFar,
       rayShadowNearFar,
-      rayShouldMarch
+      rayShouldMarch,
+      ray.get('viewPosition') as Node<'vec3'>
     )
     const rayViewPosition = ray.get('viewPosition') as Node<'vec3'>
     const raySceneViewZ = ray.get('sceneViewZ') as Node<'float'>
